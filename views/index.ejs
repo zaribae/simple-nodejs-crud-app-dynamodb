@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DynamoDB CRUD (User Switching)</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+
+<body>
+    <header>
+        <h1>DynamoDB CRUD Apps</h1>
+        <div class="user-switcher">
+            <p>Current User: <strong>
+                    <%= currentUserDisplayName %>
+                </strong> (<%= currentUserIdentifier %>)
+                    <% if (isCurrentUserAdmin) { %>
+                        <span style="color: green; font-weight: bold;">[Admin Privileges Active]</span>
+                        <% } %>
+            </p>
+            <% if (availableUsers && availableUsers.length> 0) { %>
+                <span>Switch to:</span>
+                <% availableUsers.forEach(function(user) { %>
+                    <form action="/switch_user/<%= user.identifier %>" method="post" style="display: inline;">
+                        <button type="submit"
+                            class="<%= currentUserIdentifier === user.identifier ? 'active-user' : '' %>">
+                            <%= user.displayName %>
+                        </button>
+                    </form>
+                    <% }); %>
+                        <% } %>
+        </div>
+    </header>
+
+    <main>
+        <div class="section">
+            <h2>Add Test Entry</h2>
+            <input type="text" id="addEmail" placeholder="Email (Partition Key)">
+            <input type="text" id="addNama" placeholder="Nama">
+            <input type="text" id="addNohp" placeholder="Nohp">
+            <button onclick="addEntry()">Add Entry</button>
+        </div>
+
+        <div class="section">
+            <h2>Get Entry by Email</h2>
+            <input type="text" id="getEmail" placeholder="Email to Get">
+            <button onclick="getEntry()">Get Entry</button>
+        </div>
+
+        <div class="section">
+            <h2>Update Entry by Email</h2>
+            <input type="text" id="updateEmail" placeholder="Email (to update)">
+            <input type="text" id="updateNama" placeholder="New Nama (optional)">
+            <input type="text" id="updateNohp" placeholder="New Nohp (optional)">
+            <button onclick="updateEntry()">Update Entry</button>
+        </div>
+
+        <div class="section">
+            <h2>Delete Entry by Email</h2>
+            <input type="text" id="deleteEmail" placeholder="Email to Delete">
+            <button onclick="deleteEntry()">Delete Entry</button>
+        </div>
+
+        <div class="section">
+            <h2>Scan All Entries</h2>
+            <button onclick="scanEntries()">Scan All</button>
+        </div>
+
+        <div class="admin-section" id="adminActionsSection">
+            <h2>Admin Actions: Create New Table</h2>
+            <p style="color: red;"><strong>WARNING:</strong> This uses the currently selected user's credentials. Ensure
+                they have IAM permissions.</p>
+            <input type="text" id="newTableName" placeholder="New Table Name (e.g., MyNewTable)">
+            <input type="text" id="newPartitionKeyName" placeholder="Partition Key Name (e.g., id)">
+            <select id="newPartitionKeyType">
+                <option value="S">String (S)</option>
+                <option value="N">Number (N)</option>
+                <option value="B">Binary (B)</option>
+            </select>
+            <button onclick="createTable()">Create Table</button>
+        </div>
+
+        <div class="output-section">
+            <h2>Output:</h2>
+            <pre id="output"></pre>
+        </div>
+    </main>
+
+    <script>
+        const outputDiv = document.getElementById('output');
+        const adminSection = document.getElementById('adminActionsSection');
+
+        // Function to check admin status and display section
+        // This now reflects the *current user's* admin capability
+        async function checkAdminStatus() {
+            console.log("Checking admin status for current user...");
+            try {
+                const response = await fetch('/api/admin/check'); // This API now uses session user
+                const data = await response.json();
+                if (data.isAdmin) {
+                    adminSection.style.display = 'block';
+                    console.log("Admin section displayed (current user has admin rights).");
+                } else {
+                    adminSection.style.display = 'none';
+                    console.log("Admin section hidden: " + data.message);
+                }
+            } catch (error) {
+                console.error('Error checking admin status:', error);
+                adminSection.style.display = 'none';
+                outputDiv.textContent = `Error checking admin status: ${error.message}`;
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', checkAdminStatus);
+
+        async function addEntry() {
+            const email = document.getElementById('addEmail').value;
+            const nama = document.getElementById('addNama').value;
+            const nohp = document.getElementById('addNohp').value;
+
+            if (!email || !nama || !nohp) {
+                alert('Please enter Email, Nama, and Nohp.');
+                return;
+            }
+
+            const newEntry = { Email: email, Nama: nama, Nohp: nohp };
+            try {
+                const response = await fetch('/api/tests', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', },
+                    body: JSON.stringify(newEntry),
+                });
+                const data = await response.json();
+                outputDiv.textContent = `${response.ok ? 'Success' : 'Error'}: ${JSON.stringify(data, null, 2)}`;
+            } catch (error) {
+                console.error('Fetch error:', error);
+                outputDiv.textContent = `Network error: ${error.message}`;
+            }
+        }
+
+        async function getEntry() {
+            const email = document.getElementById('getEmail').value;
+            if (!email) { alert('Please enter an Email to get.'); return; }
+            try {
+                const response = await fetch(`/api/tests/${email}`);
+                const resultText = await response.text(); // Get text first to handle non-JSON errors
+                if (response.ok) {
+                    const data = JSON.parse(resultText);
+                    outputDiv.textContent = `Entry: ${JSON.stringify(data, null, 2)}`;
+                } else {
+                    try { outputDiv.textContent = `Error: ${JSON.parse(resultText).message || resultText}`; }
+                    catch (e) { outputDiv.textContent = `Error: ${response.status} - ${resultText}`; }
+                }
+            } catch (error) {
+                console.error('Fetch error:', error);
+                outputDiv.textContent = `Network error: ${error.message}`;
+            }
+        }
+
+        async function deleteEntry() {
+            const email = document.getElementById('deleteEmail').value;
+            if (!email) { alert('Please enter an Email to delete.'); return; }
+            try {
+                const response = await fetch(`/api/tests/${email}`, { method: 'DELETE' });
+                const data = await response.json();
+                outputDiv.textContent = `${response.ok ? 'Success' : 'Error'}: ${JSON.stringify(data, null, 2)}`;
+            } catch (error) {
+                console.error('Fetch error:', error);
+                outputDiv.textContent = `Network error: ${error.message}`;
+            }
+        }
+
+        async function updateEntry() {
+            const email = document.getElementById('updateEmail').value;
+            const nama = document.getElementById('updateNama').value;
+            const nohp = document.getElementById('updateNohp').value;
+
+            if (!email) { alert('Please enter an Email to update.'); return; }
+            if (!nama && !nohp) { alert('Please enter at least a new Nama or Nohp.'); return; }
+
+            const updateData = {};
+            if (nama) updateData.Nama = nama;
+            if (nohp) updateData.Nohp = nohp;
+
+            try {
+                const response = await fetch(`/api/tests/${email}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json', },
+                    body: JSON.stringify(updateData),
+                });
+                const data = await response.json();
+                outputDiv.textContent = `${response.ok ? 'Update Success' : 'Update Error'}: ${JSON.stringify(data, null, 2)}`;
+            } catch (error) {
+                console.error('Fetch error during update:', error);
+                outputDiv.textContent = `Network error during update: ${error.message}`;
+            }
+        }
+
+        async function scanEntries() {
+            try {
+                const response = await fetch('/api/tests');
+                const data = await response.json();
+                if (response.ok) {
+                    outputDiv.textContent = `All Entries: ${JSON.stringify(data, null, 2)}`;
+                } else {
+                    outputDiv.textContent = `Error: ${data.message || response.statusText}`;
+                }
+            } catch (error) {
+                console.error('Fetch error:', error);
+                outputDiv.textContent = `Network error: ${error.message}`;
+            }
+        }
+
+        async function createTable() {
+            const tableName = document.getElementById('newTableName').value;
+            const partitionKeyName = document.getElementById('newPartitionKeyName').value;
+            const partitionKeyType = document.getElementById('newPartitionKeyType').value;
+
+            if (!tableName || !partitionKeyName) { alert('Please enter table name and partition key name.'); return; }
+
+            const tableConfig = { tableName, partitionKeyName, partitionKeyType };
+            try {
+                outputDiv.textContent = `Initiating table creation for '${tableName}'...`;
+                const response = await fetch('/api/admin/create-table', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', },
+                    body: JSON.stringify(tableConfig),
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    outputDiv.textContent = `Table Creation Result: ${JSON.stringify(data, null, 2)}`;
+                } else {
+                    outputDiv.textContent = `Table Creation Error: ${data.message || response.statusText}\nDetails: ${JSON.stringify(data.error, null, 2)}`;
+                }
+            } catch (error) {
+                console.error('Fetch error during table creation:', error);
+                outputDiv.textContent = `Network error during table creation: ${error.message}`;
+            }
+        }
+    </script>
+</body>
+
+</html>
